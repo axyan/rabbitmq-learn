@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -24,8 +27,17 @@ func main() {
 	}
 	defer ch.Close()
 
+	_, err = ch.QueueDeclare(
+		"testQueue",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+
 	msgs, err := ch.Consume(
-		"foo",
+		"testQueue",
 		"",
 		false,
 		false,
@@ -37,7 +49,9 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	wait := make(chan bool)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
 	go func() {
 		for msg := range msgs {
 			log.Printf("Received message: %s", msg.Body)
@@ -61,8 +75,8 @@ func main() {
 			}
 		}
 	}()
+	log.Println("Consuming messages from queue")
 
-	log.Println("Consuming message from queue")
-
-	<-wait
+	<-stop
+	log.Println("Stopping server")
 }

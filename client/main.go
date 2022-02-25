@@ -1,9 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -26,6 +30,15 @@ func main() {
 	}
 	defer ch.Close()
 
+	_, err = ch.QueueDeclare(
+		"testQueue",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+
 	msgs, err := ch.Consume(
 		"amq.rabbitmq.reply-to",
 		"",
@@ -39,40 +52,46 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+requestsLoop:
 	for {
-		time.Sleep(time.Duration(rand.Intn(5)) * time.Second)
-		go func() {
-			id := getRandomID()
-			err = ch.Publish(
-				"",
-				"foo",
-				false,
-				false,
-				amqp.Publishing{
-					ContentType: "text/plain",
-					Body:        []byte(id),
-					ReplyTo:     "amq.rabbitmq.reply-to",
-				},
-			)
-			if err != nil {
-				log.Fatalln(err)
-			}
-			log.Printf("Published message to queue %s", id)
+		select {
+		case <-stop:
+			log.Println("Stopping client")
+			break requestsLoop
+		default:
+			time.Sleep(getRandomSecondUpTo(5))
+			go func() {
+				id := getRandomID()
+				err = ch.Publish(
+					"",
+					"testQueue",
+					false,
+					false,
+					amqp.Publishing{
+						ContentType: "text/plain",
+						Body:        []byte(fmt.Sprintf("Hello from %s", id)),
+						ReplyTo:     "amq.rabbitmq.reply-to",
+					},
+				)
+				if err != nil {
+					log.Fatalln(err)
+				}
+				log.Printf("Published new message to queue for: %s", id)
 
-			//wait := make(chan bool)
-			//go func() {
-			//	for msg := range msgs {
-			//		log.Printf("Received reply: %s", msg.Body)
-			//		wait <- false
-			//	}
-			//}()
-
-			msg := <-msgs
-			log.Printf("Received reply: %s", msg.Body)
-		}()
+				msg := <-msgs
+				log.Printf("Received reply: %s", msg.Body)
+			}()
+		}
 	}
 }
 
 func getRandomID() string {
 	return strconv.Itoa(rand.Intn(9999999999))
+}
+
+func getRandomSecondUpTo(upperBound int) time.Duration {
+	return time.Duration(rand.Intn(upperBound)) * time.Second
 }
